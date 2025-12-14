@@ -6,9 +6,14 @@ import multer from "multer";
 import mammoth from "mammoth";
 import path from "path";
 import { createClient } from "@supabase/supabase-js";
-import pdfParse from "pdf-parse";
+import { createRequire } from "module";
 
 dotenv.config();
+
+const require = createRequire(import.meta.url);
+const pdfParse = require("pdf-parse");  // ✅ Correct for ESM
+const Tesseract = require("tesseract.js"); // OCR
+
 
 const app = express();
 app.use(cors());
@@ -32,7 +37,7 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY
 ========================= */
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 } // 20MB just in case
+  limits: { fileSize: 20 * 1024 * 1024 } // 20MB
 });
 
 /* =========================
@@ -52,13 +57,13 @@ app.post("/add", async (req, res) => {
     if (error) throw error;
     res.json({ success: true });
   } catch (err) {
-    console.error("ADD KNOWLEDGE ERROR:", err);
+    console.error("ADD ERROR:", err);
     res.status(500).json({ error: err.message || "Failed to add knowledge" });
   }
 });
 
 /* =========================
-   UPLOAD PDF / DOCX
+   UPLOAD PDF / DOCX WITH OCR
 ========================= */
 app.post("/upload", upload.single("file"), async (req, res) => {
   try {
@@ -69,39 +74,29 @@ app.post("/upload", upload.single("file"), async (req, res) => {
     const ext = path.extname(req.file.originalname).toLowerCase();
     let extractedText = "";
 
-    if (ext === ".pdf") {
-      try {
-        const data = await pdfParse(req.file.buffer);
-        extractedText = data.text;
-        if (!extractedText || !extractedText.trim()) {
-          return res.status(400).json({
-            error:
-              "PDF contains no text. It might be a scanned PDF. Consider using OCR."
-          });
-        }
-      } catch (pdfErr) {
-        console.error("PDF PARSE ERROR:", pdfErr);
-        return res.status(500).json({ error: "Failed to parse PDF file: " + pdfErr.message });
+    if (ext === ".docx") {
+      const data = await mammoth.extractRawText({ buffer: req.file.buffer });
+      extractedText = data.value.trim();
+      if (!extractedText) return res.status(400).json({ error: "DOCX contains no readable text" });
+    } else if (ext === ".pdf") {
+      const data = await pdfParse(req.file.buffer);
+      extractedText = data.text.trim();
+
+      // Use OCR if PDF has no text
+      if (!extractedText) {
+        const ocrResult = await Tesseract.recognize(req.file.buffer, "eng", { logger: m => console.log(m) });
+        extractedText = ocrResult.data.text.trim();
       }
-    } else if (ext === ".docx") {
-      try {
-        const data = await mammoth.extractRawText({ buffer: req.file.buffer });
-        extractedText = data.value;
-        if (!extractedText || !extractedText.trim()) {
-          return res.status(400).json({ error: "DOCX contains no readable text" });
-        }
-      } catch (docErr) {
-        console.error("DOCX PARSE ERROR:", docErr);
-        return res.status(500).json({ error: "Failed to parse DOCX file: " + docErr.message });
-      }
+
+      if (!extractedText) return res.status(400).json({ error: "PDF contains no readable text even after OCR" });
     } else {
       return res.status(400).json({ error: "Unsupported file type" });
     }
 
     // Insert into Supabase
-    const { error } = await supabase
-      .from("knowledge_base")
-      .insert([{ content: extractedText, source: req.file.originalname }]);
+    const { error } = await supabase.from("knowledge_base").insert([
+      { content: extractedText, source: req.file.originalname }
+    ]);
     if (error) throw error;
 
     res.json({ success: true, message: "File uploaded and indexed successfully" });
@@ -122,7 +117,8 @@ app.post("/ask", async (req, res) => {
     const { data, error } = await supabase.from("knowledge_base").select("content");
     if (error) throw error;
 
-    const context = data?.map(d => d.content).join("\n\n") || "";
+    const context = data?.map(d => d.content).filter(Boolean).join("\n\n") || "";
+
     const prompt = `
 You are an AI assistant for Material and Metallurgical Engineering.
 Answer clearly, academically, and concisely.
