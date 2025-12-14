@@ -74,17 +74,30 @@ app.post("/add", async (req, res) => {
 ========================= */
 app.post("/upload", upload.single("file"), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: "No file received" });
+    if (!req.file || !req.file.buffer) {
+      console.error("UPLOAD ERROR: No file or empty buffer");
+      return res.status(400).json({ error: "No file received or file is empty" });
+    }
 
     const ext = path.extname(req.file.originalname).toLowerCase();
     let extractedText = "";
 
     if (ext === ".pdf") {
-      const data = await pdfParse(req.file.buffer);
-      extractedText = data.text;
+      try {
+        const data = await pdfParse(req.file.buffer);
+        extractedText = data.text;
+      } catch (pdfErr) {
+        console.error("PDF PARSE ERROR:", pdfErr);
+        return res.status(500).json({ error: "Failed to parse PDF file" });
+      }
     } else if (ext === ".docx") {
-      const data = await mammoth.extractRawText({ buffer: req.file.buffer });
-      extractedText = data.value;
+      try {
+        const data = await mammoth.extractRawText({ buffer: req.file.buffer });
+        extractedText = data.value;
+      } catch (docErr) {
+        console.error("DOCX PARSE ERROR:", docErr);
+        return res.status(500).json({ error: "Failed to parse DOCX file" });
+      }
     } else {
       return res.status(400).json({ error: "Unsupported file type" });
     }
