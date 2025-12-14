@@ -3,11 +3,15 @@ import cors from "cors";
 import dotenv from "dotenv";
 import fetch from "node-fetch";
 import multer from "multer";
-import fs from "fs";
-import path from "path";
-import pdfParse from "pdf-parse";
 import mammoth from "mammoth";
+import path from "path";
 import { createClient } from "@supabase/supabase-js";
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url);
+const pdfParse = require("pdf-parse");
+
+
 
 dotenv.config();
 
@@ -32,9 +36,12 @@ const supabase = createClient(
 );
 
 /* =========================
-   FILE UPLOAD SETUP
+   FILE UPLOAD SETUP (FIXED)
 ========================= */
-const upload = multer({ dest: "uploads/" });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 } // 10MB
+});
 
 /* =========================
    TEST ROUTE
@@ -54,10 +61,7 @@ app.post("/add", async (req, res) => {
   }
 
   const { error } = await supabase.from("knowledge_base").insert([
-    {
-      content,
-      source
-    }
+    { content, source }
   ]);
 
   if (error) {
@@ -68,28 +72,33 @@ app.post("/add", async (req, res) => {
 });
 
 /* =========================
-   UPLOAD PDF / DOCX
+   UPLOAD PDF / DOCX (FIXED)
 ========================= */
 app.post("/upload", upload.single("file"), async (req, res) => {
   try {
-    const filePath = req.file.path;
+    if (!req.file) {
+      return res.status(400).json({ error: "No file received" });
+    }
+
     const ext = path.extname(req.file.originalname).toLowerCase();
     let extractedText = "";
 
     if (ext === ".pdf") {
-      const data = await pdfParse(fs.readFileSync(filePath));
+      const data = await pdfParse(req.file.buffer);
       extractedText = data.text;
-    } else if (ext === ".docx") {
-      const data = await mammoth.extractRawText({ path: filePath });
+    } 
+    else if (ext === ".docx") {
+      const data = await mammoth.extractRawText({
+        buffer: req.file.buffer
+      });
       extractedText = data.value;
-    } else {
-      fs.unlinkSync(filePath);
+    } 
+    else {
       return res.status(400).json({ error: "Unsupported file type" });
     }
 
-    if (!extractedText.trim()) {
-      fs.unlinkSync(filePath);
-      return res.status(400).json({ error: "No text extracted from file" });
+    if (!extractedText || !extractedText.trim()) {
+      return res.status(400).json({ error: "No readable text found in file" });
     }
 
     const { error } = await supabase.from("knowledge_base").insert([
@@ -99,17 +108,18 @@ app.post("/upload", upload.single("file"), async (req, res) => {
       }
     ]);
 
-    fs.unlinkSync(filePath);
-
     if (error) {
       return res.status(500).json({ error: error.message });
     }
 
-    res.json({ success: true, message: "File uploaded and indexed" });
+    res.json({
+      success: true,
+      message: "File uploaded and indexed successfully"
+    });
 
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "File upload failed" });
+    console.error("UPLOAD ERROR:", err);
+    res.status(500).json({ error: "File processing failed" });
   }
 });
 
@@ -118,13 +128,17 @@ app.post("/upload", upload.single("file"), async (req, res) => {
 ========================= */
 app.post("/ask", async (req, res) => {
   const { question } = req.body;
+
   if (!question) {
     return res.status(400).json({ error: "No question provided" });
   }
 
-  const { data } = await supabase.from("knowledge_base").select("content");
+  const { data } = await supabase
+    .from("knowledge_base")
+    .select("content");
 
-  const context = data?.map(d => d.content).join("\n\n") || "";
+  const context =
+    data?.map(d => d.content).join("\n\n") || "";
 
   const prompt = `
 You are an AI assistant for Material and Metallurgical Engineering.
@@ -159,6 +173,7 @@ ${question}
     res.json({ answer });
 
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: "AI request failed" });
   }
 });
