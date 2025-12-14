@@ -1,4 +1,4 @@
-import express from "express"; 
+import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import fetch from "node-fetch";
@@ -6,10 +6,7 @@ import multer from "multer";
 import mammoth from "mammoth";
 import path from "path";
 import { createClient } from "@supabase/supabase-js";
-import { createRequire } from "module";
-
-const require = createRequire(import.meta.url);
-const pdfParse = require("pdf-parse");
+import pdfParse from "pdf-parse"; // <-- Correct import for ES modules
 
 dotenv.config();
 
@@ -56,10 +53,7 @@ app.post("/add", async (req, res) => {
   }
 
   try {
-    const { error } = await supabase.from("knowledge_base").insert([
-      { content, source }
-    ]);
-
+    const { error } = await supabase.from("knowledge_base").insert([{ content, source }]);
     if (error) throw error;
 
     res.json({ success: true });
@@ -75,7 +69,6 @@ app.post("/add", async (req, res) => {
 app.post("/upload", upload.single("file"), async (req, res) => {
   try {
     if (!req.file || !req.file.buffer) {
-      console.error("UPLOAD ERROR: No file or empty buffer");
       return res.status(400).json({ error: "No file received or file is empty" });
     }
 
@@ -106,7 +99,6 @@ app.post("/upload", upload.single("file"), async (req, res) => {
       return res.status(400).json({ error: "No readable text found in file" });
     }
 
-    // Insert into Supabase
     const { error } = await supabase.from("knowledge_base").insert([
       { content: extractedText, source: req.file.originalname }
     ]);
