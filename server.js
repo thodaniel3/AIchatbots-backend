@@ -1,4 +1,4 @@
-import express from "express";
+import express from "express"; 
 import cors from "cors";
 import dotenv from "dotenv";
 import fetch from "node-fetch";
@@ -57,11 +57,7 @@ app.post("/add", async (req, res) => {
 
   try {
     const { error } = await supabase.from("knowledge_base").insert([
-      {
-        answer_text: content,
-        source_document: source,
-        uploaded_by: "mme"
-      }
+      { content, source }
     ]);
 
     if (error) throw error;
@@ -99,11 +95,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
 
     // Insert into Supabase
     const { error } = await supabase.from("knowledge_base").insert([
-      {
-        answer_text: extractedText,
-        source_document: req.file.originalname,
-        uploaded_by: "mme"
-      }
+      { content: extractedText, source: req.file.originalname }
     ]);
 
     if (error) throw error;
@@ -123,10 +115,10 @@ app.post("/ask", async (req, res) => {
   if (!question) return res.status(400).json({ error: "No question provided" });
 
   try {
-    const { data, error } = await supabase.from("knowledge_base").select("answer_text");
+    const { data, error } = await supabase.from("knowledge_base").select("content");
     if (error) throw error;
 
-    const context = data?.map(d => d.answer_text).join("\n\n") || "";
+    const context = data?.map(d => d.content).join("\n\n") || "";
 
     const prompt = `
 You are an AI assistant for Material and Metallurgical Engineering.
@@ -162,4 +154,3 @@ ${question}
 ========================= */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
-gi
