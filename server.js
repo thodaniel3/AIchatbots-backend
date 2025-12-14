@@ -1,4 +1,4 @@
-import express from "express";
+import express from "express"; 
 import cors from "cors";
 import dotenv from "dotenv";
 import fetch from "node-fetch";
@@ -11,9 +11,8 @@ import { createRequire } from "module";
 dotenv.config();
 
 const require = createRequire(import.meta.url);
-const pdfParse = require("pdf-parse");  // ✅ Correct for ESM
+const pdfParse = require("pdf-parse");  // Correct ESM import
 const Tesseract = require("tesseract.js"); // OCR
-
 
 const app = express();
 app.use(cors());
@@ -84,7 +83,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
 
       // Use OCR if PDF has no text
       if (!extractedText) {
-        const ocrResult = await Tesseract.recognize(req.file.buffer, "eng", { logger: m => console.log(m) });
+        const ocrResult = await Tesseract.recognize(req.file.buffer, "eng", { logger: m => console.log("OCR:", m) });
         extractedText = ocrResult.data.text.trim();
       }
 
@@ -117,17 +116,28 @@ app.post("/ask", async (req, res) => {
     const { data, error } = await supabase.from("knowledge_base").select("content");
     if (error) throw error;
 
-    const context = data?.map(d => d.content).filter(Boolean).join("\n\n") || "";
+    // Trim and sanitize content
+    const context = data
+      ?.map(d => (d.content || "").trim())
+      .filter(d => d.length > 0)
+      .join("\n\n") || "";
 
+    // Debug logs
+    console.log("Context sent to AI:", context);
+    console.log("Question:", question);
+
+    // Prompt with fallback
     const prompt = `
-You are an AI assistant for Material and Metallurgical Engineering.
-Answer clearly, academically, and concisely.
+You are an expert AI assistant for Material and Metallurgical Engineering.
+Answer the question based on the following context.
 
 Context:
 ${context}
 
 Question:
 ${question}
+
+If the answer is not in the context, respond: "I do not know."
 `;
 
     const response = await fetch(
@@ -140,7 +150,9 @@ ${question}
     );
 
     const result = await response.json();
-    const answer = result.candidates?.[0]?.content?.parts?.[0]?.text || "No answer generated.";
+    console.log("AI API Result:", result);
+
+    const answer = result.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "No answer generated.";
     res.json({ answer });
   } catch (err) {
     console.error("ASK ERROR:", err);
