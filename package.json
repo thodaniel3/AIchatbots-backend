@@ -1,0 +1,17 @@
+{
+  "name": "ai-chatbot-backend",
+  "version": "1.0.0",
+  "description": "Backend for AI Chatbot using Supabase and Google Gemini",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.87.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.22.1",
+    "node-fetch": "^3.3.2"
+  }
+}
