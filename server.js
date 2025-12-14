@@ -6,7 +6,7 @@ import multer from "multer";
 import mammoth from "mammoth";
 import path from "path";
 import { createClient } from "@supabase/supabase-js";
-import pdfParse from "pdf-parse"; // <-- Correct import for ES modules
+import pdfParse from "pdf-parse";
 
 dotenv.config();
 
@@ -32,30 +32,24 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY
 ========================= */
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 } // 10MB
+  limits: { fileSize: 20 * 1024 * 1024 } // 20MB just in case
 });
 
 /* =========================
    TEST ROUTE
 ========================= */
-app.get("/", (req, res) => {
-  res.send("✅ AI Chatbot Backend Running");
-});
+app.get("/", (req, res) => res.send("✅ AI Chatbot Backend Running"));
 
 /* =========================
    ADD MANUAL KNOWLEDGE
 ========================= */
 app.post("/add", async (req, res) => {
   const { content, source } = req.body;
-
-  if (!content || !source) {
-    return res.status(400).json({ error: "Missing content or source" });
-  }
+  if (!content || !source) return res.status(400).json({ error: "Missing content or source" });
 
   try {
     const { error } = await supabase.from("knowledge_base").insert([{ content, source }]);
     if (error) throw error;
-
     res.json({ success: true });
   } catch (err) {
     console.error("ADD KNOWLEDGE ERROR:", err);
@@ -69,7 +63,7 @@ app.post("/add", async (req, res) => {
 app.post("/upload", upload.single("file"), async (req, res) => {
   try {
     if (!req.file || !req.file.buffer) {
-      return res.status(400).json({ error: "No file received or file is empty" });
+      return res.status(400).json({ error: "No file received or empty file" });
     }
 
     const ext = path.extname(req.file.originalname).toLowerCase();
@@ -79,30 +73,35 @@ app.post("/upload", upload.single("file"), async (req, res) => {
       try {
         const data = await pdfParse(req.file.buffer);
         extractedText = data.text;
+        if (!extractedText || !extractedText.trim()) {
+          return res.status(400).json({
+            error:
+              "PDF contains no text. It might be a scanned PDF. Consider using OCR."
+          });
+        }
       } catch (pdfErr) {
         console.error("PDF PARSE ERROR:", pdfErr);
-        return res.status(500).json({ error: "Failed to parse PDF file" });
+        return res.status(500).json({ error: "Failed to parse PDF file: " + pdfErr.message });
       }
     } else if (ext === ".docx") {
       try {
         const data = await mammoth.extractRawText({ buffer: req.file.buffer });
         extractedText = data.value;
+        if (!extractedText || !extractedText.trim()) {
+          return res.status(400).json({ error: "DOCX contains no readable text" });
+        }
       } catch (docErr) {
         console.error("DOCX PARSE ERROR:", docErr);
-        return res.status(500).json({ error: "Failed to parse DOCX file" });
+        return res.status(500).json({ error: "Failed to parse DOCX file: " + docErr.message });
       }
     } else {
       return res.status(400).json({ error: "Unsupported file type" });
     }
 
-    if (!extractedText || !extractedText.trim()) {
-      return res.status(400).json({ error: "No readable text found in file" });
-    }
-
-    const { error } = await supabase.from("knowledge_base").insert([
-      { content: extractedText, source: req.file.originalname }
-    ]);
-
+    // Insert into Supabase
+    const { error } = await supabase
+      .from("knowledge_base")
+      .insert([{ content: extractedText, source: req.file.originalname }]);
     if (error) throw error;
 
     res.json({ success: true, message: "File uploaded and indexed successfully" });
@@ -113,7 +112,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
 });
 
 /* =========================
-   ASK QUESTION (GEMINI)
+   ASK QUESTION
 ========================= */
 app.post("/ask", async (req, res) => {
   const { question } = req.body;
@@ -124,7 +123,6 @@ app.post("/ask", async (req, res) => {
     if (error) throw error;
 
     const context = data?.map(d => d.content).join("\n\n") || "";
-
     const prompt = `
 You are an AI assistant for Material and Metallurgical Engineering.
 Answer clearly, academically, and concisely.
