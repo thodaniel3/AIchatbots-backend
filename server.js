@@ -11,8 +11,6 @@ import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
 
-
-
 dotenv.config();
 
 const app = express();
@@ -22,21 +20,18 @@ app.use(express.json());
 /* =========================
    ENV CHECK
 ========================= */
-if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
-  console.error("❌ Supabase credentials missing");
+if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY || !process.env.GOOGLE_API_KEY) {
+  console.error("❌ Supabase or Google API credentials missing");
   process.exit(1);
 }
 
 /* =========================
    SUPABASE CLIENT
 ========================= */
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_KEY
-);
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 /* =========================
-   FILE UPLOAD SETUP (FIXED)
+   FILE UPLOAD SETUP
 ========================= */
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -60,25 +55,30 @@ app.post("/add", async (req, res) => {
     return res.status(400).json({ error: "Missing content or source" });
   }
 
-  const { error } = await supabase.from("knowledge_base").insert([
-    { content, source }
-  ]);
+  try {
+    const { error } = await supabase.from("knowledge_base").insert([
+      {
+        answer_text: content,
+        source_document: source,
+        uploaded_by: "mme"
+      }
+    ]);
 
-  if (error) {
-    return res.status(500).json({ error: error.message });
+    if (error) throw error;
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("ADD KNOWLEDGE ERROR:", err);
+    res.status(500).json({ error: err.message || "Failed to add knowledge" });
   }
-
-  res.json({ success: true });
 });
 
 /* =========================
-   UPLOAD PDF / DOCX (FIXED)
+   UPLOAD PDF / DOCX
 ========================= */
 app.post("/upload", upload.single("file"), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: "No file received" });
-    }
+    if (!req.file) return res.status(400).json({ error: "No file received" });
 
     const ext = path.extname(req.file.originalname).toLowerCase();
     let extractedText = "";
@@ -86,14 +86,10 @@ app.post("/upload", upload.single("file"), async (req, res) => {
     if (ext === ".pdf") {
       const data = await pdfParse(req.file.buffer);
       extractedText = data.text;
-    } 
-    else if (ext === ".docx") {
-      const data = await mammoth.extractRawText({
-        buffer: req.file.buffer
-      });
+    } else if (ext === ".docx") {
+      const data = await mammoth.extractRawText({ buffer: req.file.buffer });
       extractedText = data.value;
-    } 
-    else {
+    } else {
       return res.status(400).json({ error: "Unsupported file type" });
     }
 
@@ -101,25 +97,21 @@ app.post("/upload", upload.single("file"), async (req, res) => {
       return res.status(400).json({ error: "No readable text found in file" });
     }
 
+    // Insert into Supabase
     const { error } = await supabase.from("knowledge_base").insert([
       {
-        content: extractedText,
-        source: req.file.originalname
+        answer_text: extractedText,
+        source_document: req.file.originalname,
+        uploaded_by: "mme"
       }
     ]);
 
-    if (error) {
-      return res.status(500).json({ error: error.message });
-    }
+    if (error) throw error;
 
-    res.json({
-      success: true,
-      message: "File uploaded and indexed successfully"
-    });
-
+    res.json({ success: true, message: "File uploaded and indexed successfully" });
   } catch (err) {
     console.error("UPLOAD ERROR:", err);
-    res.status(500).json({ error: "File processing failed" });
+    res.status(500).json({ error: err.message || "File processing failed" });
   }
 });
 
@@ -128,19 +120,15 @@ app.post("/upload", upload.single("file"), async (req, res) => {
 ========================= */
 app.post("/ask", async (req, res) => {
   const { question } = req.body;
+  if (!question) return res.status(400).json({ error: "No question provided" });
 
-  if (!question) {
-    return res.status(400).json({ error: "No question provided" });
-  }
+  try {
+    const { data, error } = await supabase.from("knowledge_base").select("answer_text");
+    if (error) throw error;
 
-  const { data } = await supabase
-    .from("knowledge_base")
-    .select("content");
+    const context = data?.map(d => d.answer_text).join("\n\n") || "";
 
-  const context =
-    data?.map(d => d.content).join("\n\n") || "";
-
-  const prompt = `
+    const prompt = `
 You are an AI assistant for Material and Metallurgical Engineering.
 Answer clearly, academically, and concisely.
 
@@ -151,29 +139,20 @@ Question:
 ${question}
 `;
 
-  try {
     const response = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=" +
-        process.env.GOOGLE_API_KEY,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${process.env.GOOGLE_API_KEY}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }]
-        })
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
       }
     );
 
     const result = await response.json();
-
-    const answer =
-      result.candidates?.[0]?.content?.parts?.[0]?.text ||
-      "No answer generated.";
-
+    const answer = result.candidates?.[0]?.content?.parts?.[0]?.text || "No answer generated.";
     res.json({ answer });
-
   } catch (err) {
-    console.error(err);
+    console.error("ASK ERROR:", err);
     res.status(500).json({ error: "AI request failed" });
   }
 });
@@ -182,6 +161,5 @@ ${question}
    START SERVER
 ========================= */
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+gi
